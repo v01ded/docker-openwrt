@@ -14,18 +14,28 @@ source $CONFIG_FILE 2>/dev/null || { _usage; exit 1; }
 function _nmcli() {
   type nmcli >/dev/null 2>&1
   if [[ $? -eq 0 ]]; then
-    echo "* setting interface '$WIFI_IFACE' to unmanaged"
-    nmcli dev set $WIFI_IFACE managed no
+    echo "* setting interface '$WIFI_IFACE_0' to unmanaged"
+    nmcli dev set $WIFI_IFACE_0 managed no
     nmcli radio wifi on
   fi
 }
 
-function _get_phy_from_dev() {
-  if [[ -f /sys/class/net/$WIFI_IFACE/phy80211/name ]]; then
-    WIFI_PHY=$(cat /sys/class/net/$WIFI_IFACE/phy80211/name 2>/dev/null)
-    echo "* got '$WIFI_PHY' for device '$WIFI_IFACE'"
+function _get_phy_from_dev_0() {
+  if [[ -f /sys/class/net/$WIFI_IFACE_0/phy80211/name ]]; then
+    WIFI_PHY0=$(cat /sys/class/net/$WIFI_IFACE_0/phy80211/name 2>/dev/null)
+    echo "* got '$WIFI_PHY0' for device '$WIFI_IFACE_0'"
   else
-    echo "$WIFI_IFACE is not a valid phy80211 device"
+    echo "$WIFI_IFACE_0 is not a valid phy80211 device"
+    exit 1
+  fi
+}
+
+function _get_phy_from_dev_1() {
+  if [[ -f /sys/class/net/$WIFI_IFACE_1/phy80211/name ]]; then
+    WIFI_PHY1=$(cat /sys/class/net/$WIFI_IFACE_1/phy80211/name 2>/dev/null)
+    echo "* got '$WIFI_PHY1' for device '$WIFI_IFACE_1'"
+  else
+    echo "$WIFI_IFACE_1 is not a valid phy80211 device"
     exit 1
   fi
 }
@@ -45,7 +55,8 @@ function _gen_config() {
   echo "* generating network config"
   set -a
   source $CONFIG_FILE
-  _get_phy_from_dev
+  _get_phy_from_dev_0
+  _get_phy_from_dev_1
   for file in etc/config/*.tpl; do
     envsubst <${file} >${file%.tpl}
     docker cp ${file%.tpl} $CONTAINER:/${file%.tpl}
@@ -69,7 +80,7 @@ function _set_hairpin() {
   echo -n "* set hairpin mode on interface '$1'"
   for i in {1..10}; do
     echo -n '.'
-    sudo ip netns exec $CONTAINER ip link set $WIFI_IFACE type bridge_slave hairpin on 2>/dev/null && { echo 'ok'; break; }
+    sudo ip netns exec $CONTAINER ip link set $WIFI_IFACE_0 type bridge_slave hairpin on 2>/dev/null && { echo 'ok'; break; }
     sleep 3
   done
   if [[ $i -ge 10 ]]; then
@@ -116,21 +127,25 @@ function _reload_fw() {
 }
 
 function main() {
-  test -z $WIFI_IFACE && _usage
+  test -z $WIFI_IFACE_0 && _usage
   cd "${SCRIPT_DIR}"
-  _get_phy_from_dev
+  _get_phy_from_dev_0
+  _get_phy_from_dev_1
   _nmcli
   _create_or_start_container
 
-  echo "* moving device $WIFI_PHY to docker network namespace"
   pid=$(docker inspect -f '{{.State.Pid}}' $CONTAINER)
-  sudo iw phy "$WIFI_PHY" set netns $pid
-
+  echo "* moving device $WIFI_PHY0 to docker network namespace"
+  sudo iw phy "$WIFI_PHY0" set netns $pid
+  echo "* moving device $WIFI_PHY1 to docker network namespace"
+  sudo iw phy "$WIFI_PHY1" set netns $pid
+  
   echo "* creating netns symlink '$CONTAINER'"
   sudo mkdir -p /var/run/netns
   sudo ln -sf /proc/$pid/ns/net /var/run/netns/$CONTAINER
 
-  _set_hairpin $WIFI_IFACE
+  _set_hairpin $WIFI_IFACE_0
+  _set_hairpin $WIFI_IFACE_1
 
   echo "* setting up host macvlan interface"
   sudo ip link add macvlan0 link $LAN_PARENT type macvlan mode bridge
